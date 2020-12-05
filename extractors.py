@@ -8,7 +8,8 @@ from typing import Any, Dict, Optional
 
 from . import utils
 from .constants import FB_BASE_URL, FB_MOBILE_BASE_URL
-from .fb_types import RawPost, Options, Post, RequestFunction
+from .fb_types import Options, Post, RawPost, RequestFunction
+
 
 try:
     from youtube_dl import YoutubeDL
@@ -83,6 +84,7 @@ class PostExtractor:
             'post_url': None,
             'link': None,
             'user_id': None,
+            'source': None,
         }
 
     def extract_post(self) -> Post:
@@ -105,6 +107,7 @@ class PostExtractor:
         ]
 
         post = self.make_new_post()
+        post['source'] = self.element
 
         # TODO: this is just used by `extract_reactions`, probably should not be acceded from self
         self.post = post
@@ -120,7 +123,7 @@ class PostExtractor:
             except Exception as ex:
                 logger.warning("Exception while running %s: %r", method.__name__, ex)
 
-        if True:#'reactions' in self.options:
+        if 'reactions' in self.options:
             try:
                 reactions = self.extract_reactions()
             except Exception as ex:
@@ -192,6 +195,7 @@ class PostExtractor:
 
     # TODO: Add the correct timezone
     def extract_time(self) -> PartialPost:
+        # Try to extract time for timestamp
         page_insights = self.data_ft.get('page_insights', {})
 
         for page in page_insights.values():
@@ -202,6 +206,21 @@ class PostExtractor:
                 }
             except (KeyError, ValueError):
                 continue
+
+        # Try to extract from the abbr element
+        date_element = self.element.find('abbr', first=True)
+        if date_element is not None:
+            date = utils.parse_datetime(date_element.text, search=False)
+            if date:
+                return {'time': date}
+            logger.debug("Could not parse date: %s", date_element.text)
+        else:
+            logger.warning("Could not find the abbr element for the date")
+
+        # Try to look in the entire text
+        date = utils.parse_datetime(self.element.text)
+        if date:
+            return {'time': date}
 
         return None
 
@@ -297,10 +316,7 @@ class PostExtractor:
             if match:
                 images.append(match.groups()[0].replace("&amp;", "&"))
         image = images[0] if images else None
-        return {
-            "image": image,
-            "images": images
-        }
+        return {"image": image, "images": images}
 
     def extract_reactions(self) -> PartialPost:
         """Fetch share and reactions information with a existing post obtained by `get_posts`.
@@ -309,7 +325,6 @@ class PostExtractor:
         exist.
         Note that this method will raise one http request per post, use it when you want some more
         information.
-
         Example:
         ```
         for post in get_posts('fanpage'):
@@ -424,17 +439,3 @@ class PostExtractor:
 
 class GroupPostExtractor(PostExtractor):
     """Class for extracting posts from Facebook Groups rather than Pages"""
-
-    # TODO: This might need to be aware of the timezone and locale (?)
-    def extract_time(self) -> PartialPost:
-        time = super().extract_time()
-        if time is not None:
-            return time
-
-        # In case the previous method didn't work try to parse the date.
-        # This only works for old posts that have this date format 'April 3, 2018 at 8:02 PM'.
-        time = self.element.find('abbr', first=True).text
-        time = datetime.strptime(time, '%B %d, %Y at %I:%M %p')
-        return {
-            'time': time,
-        }
